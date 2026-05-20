@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin - PTIT RAG Chatbot</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>Admin Panel</h1>
+        <p>Xử lý câu hỏi pending và correction</p>
+      </div>
+      <a href="/chat" class="admin-link">Chat</a>
+    </header>
+
+    <section class="admin-auth">
+      <label>Admin token</label>
+      <input id="adminToken" type="password" value="local-admin-token" />
+      <button id="saveTokenBtn">Lưu token</button>
+    </section>
+
+    <main class="admin-layout">
+      <section class="admin-section">
+        <div class="section-header">
+          <h2>Pending questions</h2>
+          <button id="loadPendingBtn">Tải pending</button>
+        </div>
+
+        <div id="pendingList" class="list"></div>
+      </section>
+
+      <section class="admin-section">
+        <div class="section-header">
+          <h2>Corrections</h2>
+          <button id="loadCorrectionsBtn">Tải corrections</button>
+        </div>
+
+        <div id="correctionList" class="list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

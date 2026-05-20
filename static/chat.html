@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>PTIT RAG Chatbot</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>PTIT RAG Chatbot</h1>
+        <p>Chatbot hỏi đáp dựa trên sổ tay / quy chế sinh viên</p>
+      </div>
+      <a href="/admin" class="admin-link">Admin</a>
+    </header>
+
+    <main class="chat-layout">
+      <section class="chat-panel">
+        <div id="chatBox" class="chat-box">
+          <div class="message bot">
+            <div class="bubble">
+              Xin chào, bạn có thể hỏi về chương trình học, tín chỉ, học phí, tốt nghiệp hoặc các quy định sinh viên.
+            </div>
+          </div>
+        </div>
+
+        <form id="chatForm" class="chat-form">
+          <input
+            id="questionInput"
+            type="text"
+            placeholder="Nhập câu hỏi..."
+            autocomplete="off"
+            required
+          />
+          <button id="sendBtn" type="submit">Gửi</button>
+        </form>
+      </section>
+
+      <aside class="info-panel">
+        <h2>Thông tin phản hồi</h2>
+
+        <div class="info-card">
+          <div class="label">Decision</div>
+          <div id="decisionText" class="value">-</div>
+        </div>
+
+        <div class="info-card">
+          <div class="label">Confidence</div>
+          <div id="confidenceText" class="value">-</div>
+        </div>
+
+        <div class="info-card">
+          <div class="label">Topic</div>
+          <div id="topicText" class="value">-</div>
+        </div>
+
+        <div class="info-card">
+          <div class="label">Source</div>
+          <pre id="sourceText">-</pre>
+        </div>
+
+        <div class="info-card">
+          <div class="label">Debug</div>
+          <pre id="debugText">-</pre>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="/static/js/chat.js"></script>
+</body>
+</html>
