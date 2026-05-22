@@ -9,9 +9,9 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from retriever_rrf import RRFHybridRetriever
-from rag_answer import load_lora_model, ADAPTER_DIR
-from rag_pipeline import answer_question_controlled
+from core.retriever import RRFHybridRetriever
+from core.answer import load_lora_model, ADAPTER_DIR
+from core.pipeline import answer_question_controlled
 from pathlib import Path
 from fastapi.responses import RedirectResponse, FileResponse
 from knowledge.db import init_db
@@ -95,6 +95,7 @@ def startup_event():
 class AskRequest(BaseModel):
     question: str
     user_id: Optional[str] = "web_user"
+    conversation_id: Optional[str] = None
     candidate_k: Optional[int] = 30
     top_k: Optional[int] = 3
 
@@ -207,7 +208,8 @@ async def ask(req: AskRequest):
         device,
         req.user_id,
         req.candidate_k,
-        req.top_k
+        req.top_k,
+        req.conversation_id
     )
 
     return AskResponse(

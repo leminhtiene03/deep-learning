@@ -2,12 +2,24 @@
 
 import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
+import sys
 
-DB_PATH = Path("rag_chatbot.db")
+# Add project root to path for config import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import RAG_DB_PATH
+
+DB_PATH = RAG_DB_PATH
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    # Bổ sung check_same_thread=False để tương thích với cơ chế worker threads của FastAPI
+    # Thêm timeout=15.0 để luồng sau kiên nhẫn chờ luồng trước ghi xong, tránh lỗi 'database is locked'
+    conn = sqlite3.connect(
+        DB_PATH, 
+        check_same_thread=False, 
+        timeout=15.0
+    )
     conn.row_factory = sqlite3.Row
 
     # Bật foreign key
@@ -15,8 +27,19 @@ def get_connection():
 
     # WAL giúp SQLite đọc/ghi ổn hơn khi có nhiều request nhỏ
     conn.execute("PRAGMA journal_mode = WAL;")
+    
+    # Đồng bộ ở mức NORMAL kết hợp với WAL để tăng tốc độ ghi mà vẫn an toàn dữ liệu
+    conn.execute("PRAGMA synchronous = NORMAL;")
 
     return conn
+
+# Cung cấp hàm dependency để FastAPI tạo session tự động đóng cho mỗi request
+def get_db_session():
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db():

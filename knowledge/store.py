@@ -2,6 +2,7 @@
 
 import json
 from typing import Optional, List, Dict, Any
+from contextlib import closing
 
 from knowledge.db import get_connection
 
@@ -28,49 +29,21 @@ def add_confirmed_answer(
     verified_by: Optional[str] = None,
     status: str = "active"
 ) -> int:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO confirmed_answers (
-            topic,
-            canonical_question,
-            canonical_answer,
-            source,
-            verified_by,
-            status
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        topic,
-        canonical_question,
-        canonical_answer,
-        source,
-        verified_by,
-        status
-    ))
-
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
-
-    return new_id
+    with closing(get_connection()) as conn:
+        with conn:  # Tự động commit nếu thành công, rollback nếu có lỗi
+            cur = conn.execute("""
+                INSERT INTO confirmed_answers (
+                    topic, canonical_question, canonical_answer, 
+                    source, verified_by, status
+                ) VALUES (?,?,?,?,?,?)
+            """, (topic, canonical_question, canonical_answer, source, verified_by, status))
+            return cur.lastrowid
 
 
 def get_confirmed_answer_by_id(answer_id: int) -> Optional[Dict[str, Any]]:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM confirmed_answers
-        WHERE id = ?
-    """, (answer_id,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    return row_to_dict(row)
+    with closing(get_connection()) as conn:
+        cur = conn.execute("SELECT * FROM confirmed_answers WHERE id =?", (answer_id,))
+        return row_to_dict(cur.fetchone())
 
 
 def search_confirmed_answers(
@@ -78,45 +51,23 @@ def search_confirmed_answers(
     topic: Optional[str] = None,
     limit: int = 5
 ) -> List[Dict[str, Any]]:
-    """
-    Tìm confirmed answer bằng LIKE đơn giản.
-    Sau này có thể thay bằng embedding similarity.
-    """
-    conn = get_connection()
-    cur = conn.cursor()
-
     like_query = f"%{query}%"
-
-    if topic:
-        cur.execute("""
-            SELECT *
-            FROM confirmed_answers
-            WHERE status = 'active'
-              AND topic = ?
-              AND (
-                    canonical_question LIKE ?
-                    OR canonical_answer LIKE ?
-                  )
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """, (topic, like_query, like_query, limit))
-    else:
-        cur.execute("""
-            SELECT *
-            FROM confirmed_answers
-            WHERE status = 'active'
-              AND (
-                    canonical_question LIKE ?
-                    OR canonical_answer LIKE ?
-                  )
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """, (like_query, like_query, limit))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return rows_to_dicts(rows)
+    with closing(get_connection()) as conn:
+        if topic:
+            cur = conn.execute("""
+                SELECT * FROM confirmed_answers
+                WHERE status = 'active' AND topic =?
+                  AND (canonical_question LIKE? OR canonical_answer LIKE?)
+                ORDER BY updated_at DESC LIMIT?
+            """, (topic, like_query, like_query, limit))
+        else:
+            cur = conn.execute("""
+                SELECT * FROM confirmed_answers
+                WHERE status = 'active'
+                  AND (canonical_question LIKE? OR canonical_answer LIKE?)
+                ORDER BY updated_at DESC LIMIT?
+            """, (like_query, like_query, limit))
+        return rows_to_dicts(cur.fetchall())
 
 
 # ============================================================
@@ -133,65 +84,29 @@ def add_pending_question(
     teacher_questions: Optional[List[str]] = None,
     status: str = "pending"
 ) -> int:
-    conn = get_connection()
-    cur = conn.cursor()
-
     teacher_questions_json = None
     if teacher_questions is not None:
-        teacher_questions_json = json.dumps(
-            teacher_questions,
-            ensure_ascii=False
-        )
+        teacher_questions_json = json.dumps(teacher_questions, ensure_ascii=False)
 
-    cur.execute("""
-        INSERT INTO pending_questions (
-            user_id,
-            question,
-            topic,
-            context_snapshot,
-            retrieved_chunk_id,
-            reason,
-            teacher_questions_json,
-            status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user_id,
-        question,
-        topic,
-        context_snapshot,
-        retrieved_chunk_id,
-        reason,
-        teacher_questions_json,
-        status
-    ))
-
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
-
-    return new_id
+    with closing(get_connection()) as conn:
+        with conn:
+            cur = conn.execute("""
+                INSERT INTO pending_questions (
+                    user_id, question, topic, context_snapshot, retrieved_chunk_id,
+                    reason, teacher_questions_json, status
+                ) VALUES (?,?,?,?,?,?,?,?)
+            """, (user_id, question, topic, context_snapshot, retrieved_chunk_id,
+                  reason, teacher_questions_json, status))
+            return cur.lastrowid
 
 
-def list_pending_questions(
-    status: str = "pending",
-    limit: int = 50
-) -> List[Dict[str, Any]]:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM pending_questions
-        WHERE status = ?
-        ORDER BY created_at ASC
-        LIMIT ?
-    """, (status, limit))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    results = rows_to_dicts(rows)
+def list_pending_questions(status: str = "pending", limit: int = 50) -> List[Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        cur = conn.execute("""
+            SELECT * FROM pending_questions
+            WHERE status =? ORDER BY created_at ASC LIMIT?
+        """, (status, limit))
+        results = rows_to_dicts(cur.fetchall())
 
     for item in results:
         raw = item.get("teacher_questions_json")
@@ -206,22 +121,14 @@ def list_pending_questions(
     return results
 
 
-def update_pending_status(
-    pending_id: int,
-    status: str
-) -> None:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE pending_questions
-        SET status = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (status, pending_id))
-
-    conn.commit()
-    conn.close()
+def update_pending_status(pending_id: int, status: str) -> None:
+    with closing(get_connection()) as conn:
+        with conn:
+            conn.execute("""
+                UPDATE pending_questions
+                SET status =?, updated_at = CURRENT_TIMESTAMP
+                WHERE id =?
+            """, (status, pending_id))
 
 
 def mark_pending_answered(pending_id: int) -> None:
@@ -247,133 +154,53 @@ def add_answer_log(
     decision: Optional[str] = None,
     status: str = "active"
 ) -> int:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO answer_logs (
-            user_id,
-            question,
-            answer,
-            topic,
-            chunk_id,
-            page,
-            context_snapshot,
-            retrieval_score,
-            bm25_rank,
-            faiss_rank,
-            confidence,
-            decision,
-            status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user_id,
-        question,
-        answer,
-        topic,
-        chunk_id,
-        page,
-        context_snapshot,
-        retrieval_score,
-        bm25_rank,
-        faiss_rank,
-        confidence,
-        decision,
-        status
-    ))
-
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
-
-    return new_id
+    with closing(get_connection()) as conn:
+        with conn:
+            cur = conn.execute("""
+                INSERT INTO answer_logs (
+                    user_id, question, answer, topic, chunk_id, page,
+                    context_snapshot, retrieval_score, bm25_rank, faiss_rank,
+                    confidence, decision, status
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (user_id, question, answer, topic, chunk_id, page, context_snapshot,
+                  retrieval_score, bm25_rank, faiss_rank, confidence, decision, status))
+            return cur.lastrowid
 
 
-def get_answer_log_by_id(log_id: int) -> Optional[Dict[str, Any]]:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM answer_logs
-        WHERE id = ?
-    """, (log_id,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    return row_to_dict(row)
+def get_answer_log_by_id(log_id: int) -> Optional [Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        cur = conn.execute("SELECT * FROM answer_logs WHERE id =?", (log_id,))
+        return row_to_dict(cur.fetchone())
 
 
-def list_answer_logs_by_user(
-    user_id: str,
-    limit: int = 20
-) -> List[Dict[str, Any]]:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM answer_logs
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-    """, (user_id, limit))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return rows_to_dicts(rows)
+def list_answer_logs_by_user(user_id: str, limit: int = 20) -> List [Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        cur = conn.execute("""
+            SELECT * FROM answer_logs WHERE user_id =? 
+            ORDER BY created_at DESC LIMIT?
+        """, (user_id, limit))
+        return rows_to_dicts(cur.fetchall())
 
 
-def list_answer_logs_by_topic(
-    topic: str,
-    limit: int = 50
-) -> List[Dict[str, Any]]:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM answer_logs
-        WHERE topic = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-    """, (topic, limit))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return rows_to_dicts(rows)
+def list_answer_logs_by_topic(topic: str, limit: int = 50) -> List [Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        cur = conn.execute("""
+            SELECT * FROM answer_logs WHERE topic =? 
+            ORDER BY created_at DESC LIMIT?
+        """, (topic, limit))
+        return rows_to_dicts(cur.fetchall())
 
 
 def mark_answer_log_needs_correction(log_id: int) -> None:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE answer_logs
-        SET status = 'needs_correction'
-        WHERE id = ?
-    """, (log_id,))
-
-    conn.commit()
-    conn.close()
+    with closing(get_connection()) as conn:
+        with conn:
+            conn.execute("UPDATE answer_logs SET status = 'needs_correction' WHERE id =?", (log_id,))
 
 
 def mark_answer_log_corrected(log_id: int) -> None:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE answer_logs
-        SET status = 'corrected'
-        WHERE id = ?
-    """, (log_id,))
-
-    conn.commit()
-    conn.close()
+    with closing(get_connection()) as conn:
+        with conn:
+            conn.execute("UPDATE answer_logs SET status = 'corrected' WHERE id =?", (log_id,))
 
 
 # ============================================================
@@ -393,74 +220,36 @@ def create_correction(
         if log:
             old_answer = log.get("answer")
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO corrections (
-            answer_log_id,
-            old_answer,
-            new_answer,
-            reason,
-            source_confirmed_answer_id,
-            status
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        answer_log_id,
-        old_answer,
-        new_answer,
-        reason,
-        source_confirmed_answer_id,
-        status
-    ))
-
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
+    with closing(get_connection()) as conn:
+        with conn:
+            cur = conn.execute("""
+                INSERT INTO corrections (
+                    answer_log_id, old_answer, new_answer, 
+                    reason, source_confirmed_answer_id, status
+                ) VALUES (?,?,?,?,?,?)
+            """, (answer_log_id, old_answer, new_answer, reason, source_confirmed_answer_id, status))
+            new_id = cur.lastrowid
 
     mark_answer_log_needs_correction(answer_log_id)
-
     return new_id
 
 
-def list_corrections(
-    status: str = "pending",
-    limit: int = 50
-) -> List[Dict[str, Any]]:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM corrections
-        WHERE status = ?
-        ORDER BY created_at ASC
-        LIMIT ?
-    """, (status, limit))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return rows_to_dicts(rows)
+def list_corrections(status: str = "pending", limit: int = 50) -> List[Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        cur = conn.execute("""
+            SELECT * FROM corrections WHERE status =? 
+            ORDER BY created_at ASC LIMIT?
+        """, (status, limit))
+        return rows_to_dicts(cur.fetchall())
 
 
-def update_correction_status(
-    correction_id: int,
-    status: str
-) -> None:
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE corrections
-        SET status = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (status, correction_id))
-
-    conn.commit()
-    conn.close()
+def update_correction_status(correction_id: int, status: str) -> None:
+    with closing(get_connection()) as conn:
+        with conn:
+            conn.execute("""
+                UPDATE corrections SET status =?, updated_at = CURRENT_TIMESTAMP 
+                WHERE id =?
+            """, (status, correction_id))
 
 
 def mark_correction_notified(correction_id: int) -> None:
@@ -477,28 +266,12 @@ def save_teacher_answer_for_pending(
     verified_by: Optional[str] = None,
     source: Optional[str] = "teacher"
 ) -> int:
-    """
-    Khi thầy cô trả lời 1 pending question:
-    - lấy pending question
-    - lưu thành confirmed answer
-    - đánh dấu pending là answered
-    """
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM pending_questions
-        WHERE id = ?
-    """, (pending_id,))
-
-    pending = cur.fetchone()
-    conn.close()
+    with closing(get_connection()) as conn:
+        cur = conn.execute("SELECT * FROM pending_questions WHERE id =?", (pending_id,))
+        pending = row_to_dict(cur.fetchone())
 
     if pending is None:
         raise ValueError(f"Không tìm thấy pending question id={pending_id}")
-
-    pending = dict(pending)
 
     confirmed_id = add_confirmed_answer(
         topic=pending.get("topic"),
@@ -510,16 +283,8 @@ def save_teacher_answer_for_pending(
     )
 
     mark_pending_answered(pending_id)
-
     return confirmed_id
 
 
-def find_logs_that_may_need_correction(
-    topic: str,
-    limit: int = 50
-) -> List[Dict[str, Any]]:
-    """
-    Bản đơn giản: lấy các answer_logs cùng topic.
-    Sau này có thể nâng cấp bằng similarity search.
-    """
+def find_logs_that_may_need_correction(topic: str, limit: int = 50) -> List[Dict[str, Any]]:
     return list_answer_logs_by_topic(topic=topic, limit=limit)

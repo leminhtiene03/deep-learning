@@ -1,6 +1,11 @@
-# admin_corrections.py
+# admin_cli/admin_corrections.py
 
 import argparse
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from knowledge.db import init_db
 from knowledge.store import list_corrections, mark_correction_notified

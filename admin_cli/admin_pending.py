@@ -1,6 +1,11 @@
-# admin_pending.py
+# admin_cli/admin_pending.py
 
 import argparse
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from knowledge.db import init_db
 from workflow.teacher_queue import print_pending_questions

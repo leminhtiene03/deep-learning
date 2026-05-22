@@ -1,4 +1,4 @@
-# retriever_rrf.py
+# core/retriever.py
 # Hybrid Retriever using RRF instead of raw weighted-sum BM25 + FAISS
 
 import os
@@ -7,12 +7,16 @@ import json
 import pickle
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 
 import numpy as np
 import faiss
 from pyvi import ViTokenizer
 from sentence_transformers import SentenceTransformer
 
+# Add project root to path for config import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import INDEX_DIR
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -20,7 +24,7 @@ except Exception:
     pass
 
 
-DEFAULT_INDEX_DIR = "./index"
+DEFAULT_INDEX_DIR = str(INDEX_DIR)
 DEFAULT_MODEL_NAME = "bkai-foundation-models/vietnamese-bi-encoder"
 
 

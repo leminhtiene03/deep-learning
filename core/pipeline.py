@@ -1,12 +1,11 @@
-# rag_pipeline.py
+# core/pipeline.py
 
 import argparse
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
-from retriever_rrf import RRFHybridRetriever
+from .retriever import RRFHybridRetriever
 
-# Tận dụng lại hàm load model và generate đã viết trong rag_answer.py
-from rag_answer import (
+from .answer import (
     load_lora_model,
     generate_answer,
     ADAPTER_DIR
@@ -24,26 +23,22 @@ from knowledge.store import (
     add_pending_question
 )
 
+from chat.history_store import ChatHistoryStore
+from chat.question_rewriter import rewrite_question
+
 
 def get_hit_attr(hit, name: str, default=None):
-    """
-    Lấy thuộc tính từ Hit object một cách an toàn.
-    """
     return getattr(hit, name, default)
 
 def build_multi_context_from_hits(
     hits,
-    max_chars_per_chunk: int = 1800,
-    max_total_chars: int = 5200
+    tokenizer,
+    base_token_count: int = 0,
+    max_total_tokens: int = 800
 ):
-    """
-    Ghép nhiều chunk thành một context duy nhất cho model.
-    Giữ metadata nguồn để model dễ bám và để frontend hiển thị.
-    """
-
     context_parts = []
     sources = []
-    total_chars = 0
+    current_tokens = base_token_count
 
     for i, hit in enumerate(hits, start=1):
         chunk = hit.chunk
@@ -59,8 +54,6 @@ def build_multi_context_from_hits(
         if not content:
             continue
 
-        content = content[:max_chars_per_chunk]
-
         part = (
             f"[Nguồn {i}]\n"
             f"chunk_id: {chunk_id}\n"
@@ -69,11 +62,32 @@ def build_multi_context_from_hits(
             f"content:\n{content}"
         )
 
-        if total_chars + len(part) > max_total_chars:
-            break
+        part_token_count = len(tokenizer.encode(part))
+
+        if current_tokens + part_token_count > max_total_tokens:
+            if len(context_parts) == 0:
+                allowed_tokens = max_total_tokens - current_tokens
+                if allowed_tokens > 50:
+                    encoded_part = tokenizer.encode(part)[:allowed_tokens]
+                    part = tokenizer.decode(encoded_part, skip_special_tokens=True)
+                    context_parts.append(part)
+                    sources.append({
+                        "rank": i,
+                        "chunk_id": chunk_id,
+                        "page": page,
+                        "title": title,
+                        "content": content,
+                        "retrieval_score": get_hit_attr(hit, "score", None),
+                        "rrf_score": get_hit_attr(hit, "rrf_score", None),
+                        "bm25_rank": get_hit_attr(hit, "bm25_rank", None),
+                        "faiss_rank": get_hit_attr(hit, "faiss_rank", None),
+                        "bm25_score": get_hit_attr(hit, "bm25_score", None),
+                        "faiss_score": get_hit_attr(hit, "faiss_score", None),
+                    })
+            break 
 
         context_parts.append(part)
-        total_chars += len(part)
+        current_tokens += part_token_count
 
         sources.append({
             "rank": i,
@@ -90,13 +104,9 @@ def build_multi_context_from_hits(
         })
 
     return "\n\n" + ("=" * 60 + "\n\n").join(context_parts), sources
-def find_confirmed_answer(question: str, topic: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Tìm câu trả lời đã được xác nhận trước khi gọi RAG/model.
-    Bản đầu dùng LIKE đơn giản từ SQLite.
-    Sau này có thể nâng cấp bằng embedding similarity.
-    """
 
+
+def find_confirmed_answer(question: str, topic: Optional[str] = None) -> Optional[Dict[str, Any]]:
     results = search_confirmed_answers(
         query=question,
         topic=topic,
@@ -104,18 +114,16 @@ def find_confirmed_answer(question: str, topic: Optional[str] = None) -> Optiona
     )
 
     if results:
-        return results[0]
+        return results
 
-    # Nếu tìm theo topic không ra, thử tìm rộng hơn
     if topic:
         results = search_confirmed_answers(
             query=question,
             topic=None,
             limit=1
         )
-
         if results:
-            return results[0]
+            return results
 
     return None
 
@@ -128,30 +136,17 @@ def answer_question_controlled(
     device: str,
     user_id: str = "anonymous",
     candidate_k: int = 30,
-    top_k: int = 3
+    top_k: int = 3,
+    conversation_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Pipeline chính:
-    - check confirmed answer
-    - retrieve
-    - generate
-    - verify
-    - gate
-    - save logs/pending
-    """
-
+    
     init_db()
-
     topic = infer_topic(question)
 
-    # =========================================================
     # 1. Ưu tiên câu trả lời đã xác nhận
-    # =========================================================
     confirmed = find_confirmed_answer(question, topic=topic)
-
     if confirmed is not None:
         final_answer = confirmed["canonical_answer"]
-
         log_id = add_answer_log(
             user_id=user_id,
             question=question,
@@ -161,6 +156,12 @@ def answer_question_controlled(
             decision="use_confirmed_cache",
             status="active"
         )
+
+        # Lưu vào lịch sử chat
+        if conversation_id:
+            history_store = ChatHistoryStore()
+            history_store.add_message(conversation_id, "user", question)
+            history_store.add_message(conversation_id, "assistant", final_answer)
 
         return {
             "question": question,
@@ -178,17 +179,34 @@ def answer_question_controlled(
                 "decision": "use_confirmed_cache",
                 "confidence": "high",
                 "topic": topic,
-                "reasons": ["Dùng câu trả lời đã được xác nhận trong confirmed_answers."]
+                "reasons": ["Tìm thấy câu trả lời đã được xác nhận phù hợp với câu hỏi."]
             },
             "chunk": None,
             "pending_id": None
         }
 
-    # =========================================================
-    # 2. Retrieve top 1 chunk
-    # =========================================================
+    # 2. Query Rewriting với lịch sử hội thoại
+    search_query = question
+    history_store = ChatHistoryStore()
+
+    if conversation_id:
+        history = history_store.get_recent_history(conversation_id, k=3)
+        if history and len(history) > 0:
+            try:
+                search_query = rewrite_question(
+                    history=history,
+                    current_query=question,
+                    llm_model=model,
+                    tokenizer=tokenizer
+                )
+            except Exception as e:
+                import logging
+                logging.warning(f"Query rewriting failed: {e}, using original question")
+                search_query = question
+
+    # 3. Retrieve top chunks
     hits = retriever.search(
-        question,
+        search_query,
         top_k=top_k,
         candidate_k=candidate_k
     )
@@ -198,25 +216,21 @@ def answer_question_controlled(
             "Mình chưa tìm thấy ngữ cảnh phù hợp trong dữ liệu hiện tại. "
             "Câu hỏi này nên được chuyển cho thầy cô hoặc đơn vị phụ trách xác minh thêm."
         )
-
         context_check = {
             "context_status": "no_context",
             "context_score": 0.0,
-            "reasons": ["Retriever không tìm thấy chunk phù hợp."]
+            "reasons": ["Không tìm thấy chunk nào phù hợp với câu hỏi."]
         }
-
         answer_check = {
             "answer_status": "bad_answer",
             "answer_score": 0.0,
             "reasons": ["Không có context để sinh câu trả lời."]
         }
-
         gate = decide_action(
             question=question,
             context_check=context_check,
             answer_check=answer_check
         )
-
         log_id = add_answer_log(
             user_id=user_id,
             question=question,
@@ -226,7 +240,6 @@ def answer_question_controlled(
             decision=gate["decision"],
             status="active"
         )
-
         pending_id = add_pending_question(
             user_id=user_id,
             question=question,
@@ -234,9 +247,15 @@ def answer_question_controlled(
             context_snapshot=None,
             retrieved_chunk_id=None,
             reason="Không tìm thấy context phù hợp.",
-            teacher_questions=gate.get("teacher_questions", []),
+            teacher_questions=gate.get("teacher_questions",),
             status="pending"
         )
+
+        # Lưu vào lịch sử chat
+        if conversation_id:
+            history_store = ChatHistoryStore()
+            history_store.add_message(conversation_id, "user", question)
+            history_store.add_message(conversation_id, "assistant", fallback_answer)
 
         return {
             "question": question,
@@ -257,10 +276,13 @@ def answer_question_controlled(
     top_hit = hits[0]
     chunk = top_hit.chunk
 
+    question_tokens = len(tokenizer.encode(question))
+
     context, sources = build_multi_context_from_hits(
-        hits,
-        max_chars_per_chunk=1800,
-        max_total_chars=5200
+        hits=hits,
+        tokenizer=tokenizer,
+        base_token_count=question_tokens,
+        max_total_tokens=800 
     )
 
     chunk_id = chunk.get("chunk_id")
@@ -273,9 +295,7 @@ def answer_question_controlled(
     bm25_score = get_hit_attr(top_hit, "bm25_score", None)
     faiss_score = get_hit_attr(top_hit, "faiss_score", None)
 
-    # =========================================================
     # 3. Check context trước
-    # =========================================================
     context_check = check_context(
         question=question,
         chunk=chunk,
@@ -284,9 +304,7 @@ def answer_question_controlled(
         faiss_rank=faiss_rank
     )
 
-    # =========================================================
     # 4. Generate answer bằng BARTpho-LoRA
-    # =========================================================
     raw_answer = generate_answer(
         question=question,
         context=context,
@@ -295,18 +313,14 @@ def answer_question_controlled(
         device=device
     )
 
-    # =========================================================
     # 5. Verify answer
-    # =========================================================
     answer_check = verify_answer(
         question=question,
         context=context,
         answer=raw_answer
     )
 
-    # =========================================================
     # 6. Confidence Gate
-    # =========================================================
     gate = decide_action(
         question=question,
         context_check=context_check,
@@ -318,9 +332,7 @@ def answer_question_controlled(
         gate_result=gate
     )
 
-    # =========================================================
     # 7. Lưu answer log
-    # =========================================================
     log_id = add_answer_log(
         user_id=user_id,
         question=question,
@@ -337,9 +349,7 @@ def answer_question_controlled(
         status="active"
     )
 
-    # =========================================================
     # 8. Nếu không chắc thì lưu pending question
-    # =========================================================
     pending_id = None
 
     if gate["decision"] == "ask_teacher":
@@ -349,10 +359,16 @@ def answer_question_controlled(
             topic=gate["topic"],
             context_snapshot=context,
             retrieved_chunk_id=chunk_id,
-            reason="; ".join(gate.get("reasons", [])),
-            teacher_questions=gate.get("teacher_questions", []),
+            reason="; ".join(gate.get("reasons",)),
+            teacher_questions=gate.get("teacher_questions",),
             status="pending"
         )
+
+    # Lưu vào lịch sử chat
+    if conversation_id:
+        history_store = ChatHistoryStore()
+        history_store.add_message(conversation_id, "user", question)
+        history_store.add_message(conversation_id, "assistant", final_answer)
 
     return {
         "question": question,
@@ -400,11 +416,7 @@ def print_pipeline_result(result: Dict[str, Any], show_debug: bool = False, show
     print("answer_log_id:", result.get("answer_log_id"))
     print("pending_id   :", result.get("pending_id"))
 
-    # =====================================================
-    # In tất cả source nếu có multi-chunk retrieval
-    # =====================================================
     chunks = result.get("chunks") or []
-
     if chunks:
         print("\nSOURCES:")
         print("Total sources:", len(chunks))
@@ -422,11 +434,8 @@ def print_pipeline_result(result: Dict[str, Any], show_debug: bool = False, show
             if show_context:
                 print("\nCONTENT:")
                 print(c.get("content", "")[:1800])
-
     else:
-        # Fallback nếu code cũ chỉ có 1 chunk
         chunk = result.get("chunk")
-
         if chunk:
             print("\nSOURCE:")
             print("chunk_id :", chunk.get("chunk_id"))
@@ -443,13 +452,10 @@ def print_pipeline_result(result: Dict[str, Any], show_debug: bool = False, show
     if show_debug:
         print("\nCONTEXT CHECK:")
         print(result.get("context_check"))
-
         print("\nANSWER CHECK:")
         print(result.get("answer_check"))
-
         print("\nGATE:")
         print(result.get("gate"))
-
         if result.get("raw_model_answer") is not None:
             print("\nRAW MODEL ANSWER:")
             print(result.get("raw_model_answer"))

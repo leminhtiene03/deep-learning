@@ -1,4 +1,4 @@
-# rag_answer.py
+# core/answer.py
 # RAG pipeline: RRF retriever top-1 chunk -> BARTpho-LoRA answer generation
 from huggingface_hub import snapshot_download
 from transformers import BartphoTokenizer
@@ -6,11 +6,16 @@ import os
 import sys
 import argparse
 import torch
+from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from peft import PeftModel
 
-from retriever_rrf import RRFHybridRetriever
+from .retriever import RRFHybridRetriever
+
+# Add project root to path for config import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BARTPHO_ADAPTER_DIR
 
 
 try:
@@ -21,13 +26,8 @@ except Exception:
 
 BASE_MODEL = "vinai/bartpho-syllable"
 
-# Sửa đường dẫn này theo nơi bạn lưu LoRA adapter
-# Ví dụ Colab/Drive:
-# ADAPTER_DIR = "/content/drive/MyDrive/PTIT/lora_bartpho_rag_train_final/best_lora_adapter"
-#
-# Ví dụ Windows local:
-# ADAPTER_DIR = "./models/bartpho_lora_adapter"
-ADAPTER_DIR = "./models/bartpho_lora_adapter"
+# Adapter directory from config
+ADAPTER_DIR = BARTPHO_ADAPTER_DIR
 
 MAX_INPUT_TOKENS = 1024
 MAX_NEW_TOKENS = 256

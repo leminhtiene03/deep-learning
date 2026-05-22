@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import pickle
 import re
+import sys
 from pathlib import Path
 
 import faiss
@@ -21,9 +22,12 @@ from pyvi import ViTokenizer
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-ROOT = Path(__file__).parent
-CHUNKS_PATH = ROOT / "chunks_table_aware.json"
-INDEX_DIR = ROOT / "index"
+# Add project root to path for config import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import CHUNKS_TABLE_AWARE_PATH, INDEX_DIR as CONFIG_INDEX_DIR
+
+CHUNKS_PATH = Path(CHUNKS_TABLE_AWARE_PATH)
+INDEX_DIR = Path(CONFIG_INDEX_DIR)
 MODEL_NAME = "bkai-foundation-models/vietnamese-bi-encoder"
 
 
