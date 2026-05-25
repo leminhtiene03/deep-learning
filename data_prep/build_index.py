@@ -25,6 +25,7 @@ from sentence_transformers import SentenceTransformer
 # Add project root to path for config import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import CHUNKS_TABLE_AWARE_PATH, INDEX_DIR as CONFIG_INDEX_DIR
+from data_prep.chunk_context import apply_context_to_chunks
 
 CHUNKS_PATH = Path(CHUNKS_TABLE_AWARE_PATH)
 INDEX_DIR = Path(CONFIG_INDEX_DIR)
@@ -47,6 +48,9 @@ def main() -> None:
     with CHUNKS_PATH.open("r", encoding="utf-8") as f:
         chunks = json.load(f)
     print(f"[load] {len(chunks)} chunks")
+
+    print("[context] prepending Chương / Điều / Khoản metadata to chunk text ...")
+    chunks = apply_context_to_chunks(chunks)
 
     # BM25 over segmented tokens
     print("[bm25] segmenting + tokenizing ...")

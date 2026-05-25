@@ -17,6 +17,14 @@ from sentence_transformers import SentenceTransformer
 # Add project root to path for config import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import INDEX_DIR
+from control.query_constraints import (
+    parse_legal_citation,
+    chunk_matches_legal_citation,
+    normalize_vietnamese,
+)
+
+# Boost RRF when query cites a specific điểm/khoản/điều (lexical disambiguation)
+LEGAL_CITATION_RRF_BOOST = 0.12
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -193,6 +201,31 @@ class RRFHybridRetriever:
 
         return results, raw_scores
 
+    def _apply_legal_citation_boost(
+        self,
+        query: str,
+        rrf_scores: Dict[int, float],
+    ) -> Dict[int, float]:
+        citation = parse_legal_citation(query)
+        if citation is None:
+            return rrf_scores
+
+        query_norm = normalize_vietnamese(query)
+        exact_in_query = citation.exact_phrase in query_norm
+
+        for idx, chunk in enumerate(self.chunks):
+            if not chunk_matches_legal_citation(chunk, citation):
+                continue
+
+            boost = LEGAL_CITATION_RRF_BOOST
+            content_norm = normalize_vietnamese(chunk.get("content", ""))
+            if exact_in_query and citation.exact_phrase in content_norm:
+                boost += LEGAL_CITATION_RRF_BOOST
+
+            rrf_scores[idx] = rrf_scores.get(idx, 0.0) + boost
+
+        return rrf_scores
+
     def search(
         self,
         query: str,
@@ -221,6 +254,8 @@ class RRFHybridRetriever:
             rrf_scores[idx] = rrf_scores.get(idx, 0.0) + (
                 self.faiss_weight / (self.rrf_k + rank)
             )
+
+        rrf_scores = self._apply_legal_citation_boost(query, rrf_scores)
 
         ranked = sorted(
             rrf_scores.items(),

@@ -24,7 +24,7 @@ from knowledge.store import (
 )
 
 from chat.history_store import ChatHistoryStore
-from chat.question_rewriter import rewrite_question
+from chat.question_rewriter import rewrite_question, rewrite_question_simple
 
 
 def get_hit_attr(hit, name: str, default=None):
@@ -34,7 +34,7 @@ def build_multi_context_from_hits(
     hits,
     tokenizer,
     base_token_count: int = 0,
-    max_total_tokens: int = 800
+    max_total_tokens: int = 1024
 ):
     context_parts = []
     sources = []
@@ -143,8 +143,29 @@ def answer_question_controlled(
     init_db()
     topic = infer_topic(question)
 
-    # 1. Ưu tiên câu trả lời đã xác nhận
-    confirmed = find_confirmed_answer(question, topic=topic)
+    # Query rewriting (multi-turn) — trước cache và retrieval
+    search_query = question
+    history_store = ChatHistoryStore()
+
+    if conversation_id:
+        history = history_store.get_recent_history(conversation_id, k=3)
+        if history:
+            try:
+                search_query = rewrite_question(
+                    history=history,
+                    current_query=question,
+                    llm_model=model,
+                    tokenizer=tokenizer,
+                )
+            except Exception as e:
+                import logging
+                logging.warning(
+                    "Query rewriting failed: %s, using rule-based fallback", e
+                )
+                search_query = rewrite_question_simple(history, question)
+
+    # 1. Ưu tiên câu trả lời đã xác nhận (dùng câu đã viết lại nếu có)
+    confirmed = find_confirmed_answer(search_query, topic=topic)
     if confirmed is not None:
         final_answer = confirmed["canonical_answer"]
         log_id = add_answer_log(
@@ -157,9 +178,7 @@ def answer_question_controlled(
             status="active"
         )
 
-        # Lưu vào lịch sử chat
         if conversation_id:
-            history_store = ChatHistoryStore()
             history_store.add_message(conversation_id, "user", question)
             history_store.add_message(conversation_id, "assistant", final_answer)
 
@@ -185,26 +204,7 @@ def answer_question_controlled(
             "pending_id": None
         }
 
-    # 2. Query Rewriting với lịch sử hội thoại
-    search_query = question
-    history_store = ChatHistoryStore()
-
-    if conversation_id:
-        history = history_store.get_recent_history(conversation_id, k=3)
-        if history and len(history) > 0:
-            try:
-                search_query = rewrite_question(
-                    history=history,
-                    current_query=question,
-                    llm_model=model,
-                    tokenizer=tokenizer
-                )
-            except Exception as e:
-                import logging
-                logging.warning(f"Query rewriting failed: {e}, using original question")
-                search_query = question
-
-    # 3. Retrieve top chunks
+    # 2. Retrieve top chunks (search_query đã được viết lại nếu có conversation_id)
     hits = retriever.search(
         search_query,
         top_k=top_k,
@@ -251,9 +251,7 @@ def answer_question_controlled(
             status="pending"
         )
 
-        # Lưu vào lịch sử chat
         if conversation_id:
-            history_store = ChatHistoryStore()
             history_store.add_message(conversation_id, "user", question)
             history_store.add_message(conversation_id, "assistant", fallback_answer)
 
@@ -282,7 +280,7 @@ def answer_question_controlled(
         hits=hits,
         tokenizer=tokenizer,
         base_token_count=question_tokens,
-        max_total_tokens=800 
+        max_total_tokens=1024
     )
 
     chunk_id = chunk.get("chunk_id")
@@ -364,9 +362,7 @@ def answer_question_controlled(
             status="pending"
         )
 
-    # Lưu vào lịch sử chat
     if conversation_id:
-        history_store = ChatHistoryStore()
         history_store.add_message(conversation_id, "user", question)
         history_store.add_message(conversation_id, "assistant", final_answer)
 

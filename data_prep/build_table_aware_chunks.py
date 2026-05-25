@@ -5,7 +5,11 @@
 import json
 import re
 import copy
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from data_prep.chunk_context import apply_context_to_chunks
 
 
 INPUT_PATH = "chunks_new.json"
@@ -401,6 +405,9 @@ def main():
 
     # Rebuild lại chunk_id cho file full output
     new_chunks = rebuild_chunk_ids(new_chunks)
+
+    print("Prepending structural context (Chương / Điều / Khoản) to chunks ...")
+    new_chunks = apply_context_to_chunks(new_chunks)
 
     # Lọc riêng các chunk dạng bảng sau khi đã rebuild ID
     # Như vậy chunk_id trong chunks_table_only.json khớp với chunks_table_aware.json

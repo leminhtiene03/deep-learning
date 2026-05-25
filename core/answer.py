@@ -30,7 +30,7 @@ BASE_MODEL = "vinai/bartpho-syllable"
 ADAPTER_DIR = BARTPHO_ADAPTER_DIR
 
 MAX_INPUT_TOKENS = 1024
-MAX_NEW_TOKENS = 256
+MAX_NEW_TOKENS = 512
 
 
 def load_lora_model(adapter_dir: str):

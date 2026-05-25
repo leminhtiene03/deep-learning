@@ -1,0 +1,232 @@
+TÀI LIỆU MÔ TẢ CẤU TRÚC HỆ THỐNG CHATBOT RAG PTIT
+Mô tả chức năng các folder và file Python trong hệ thống
+Phiên bản tài liệu: local development
+Mục đích: phục vụ quản lý mã nguồn, báo cáo kỹ thuật và triển khai web local/public
+
+Tóm tắt: Hệ thống gồm backend FastAPI, RAG retrieval bằng BM25 + FAISS + RRF, model BARTpho-LoRA, tầng kiểm soát độ tin cậy, SQLite database, workflow hỏi thầy cô/admin, và giao diện web local cho user/admin.
+
+1. Cấu trúc tổng thể hệ thống
+PythonProject5/
+|
+|-- app.py
+|-- build_index.py
+|-- retriever_rrf.py
+|-- rag_answer.py
+|-- rag_pipeline.py
+|
+|-- control/
+|-- knowledge/
+|-- workflow/
+|-- static/
+|-- index/
+|-- models/
+|-- hf_models/
+|
+|-- admin_pending.py
+|-- admin_answer_pending.py
+|-- admin_corrections.py
+|
+|-- test_db.py
+|-- test_store.py
+|-- test_control.py
+`-- check_db_records.py
+Các thành phần trên phối hợp để tạo thành chatbot RAG có khả năng trả lời từ tài liệu, kiểm tra độ tin cậy, lưu câu hỏi chưa chắc vào hàng chờ, tiếp nhận câu trả lời từ thầy cô/admin, và tạo correction cho câu trả lời cũ.
+2. Các folder chính
+
+control/
+Kiểm tra context có đủ liên quan không.
+Kiểm tra answer có bám context không.
+Quyết định trả lời thẳng, trả lời thận trọng, hoặc chuyển hỏi thầy cô.
+Nhận diện câu hỏi về quyền/được phép/ngoại lệ.
+Nhận diện ngành và học kỳ trong câu hỏi.
+Rerank chunk theo ngành + học kỳ để giảm nhiễu retrieval.
+knowledge/
+Tạo database rag_chatbot.db.
+Lưu câu trả lời đã xác nhận bởi thầy cô/admin.
+Lưu câu hỏi pending cần xác minh.
+Lưu lịch sử answer_logs.
+Lưu corrections cho câu trả lời cũ.
+Cung cấp các hàm thêm/sửa/tìm dữ liệu.
+workflow/
+Quản lý hàng chờ câu hỏi cần hỏi thầy cô.
+Lưu câu trả lời thầy cô vào confirmed_answers.
+Tạo correction cho answer_logs cũ có liên quan.
+Đồng bộ tri thức mới vào hệ thống.
+3. Các file Python chính ở thư mục gốc
+
+app.py
+Khởi động web server local bằng FastAPI.
+Load retriever một lần khi server startup.
+Load BARTpho-LoRA một lần khi server startup.
+Tạo API POST /api/ask cho chatbot.
+Tạo API admin để xem pending, trả lời pending, xem corrections và mark notified.
+Phục vụ trang /chat và /admin.
+Lệnh chạy thường dùng:
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
+build_index.py
+Đọc file chunks JSON.
+Tokenize nội dung bằng PyVi cho BM25.
+Encode chunks bằng Vietnamese bi-encoder.
+Tạo FAISS vector index.
+Lưu bm25.pkl, faiss.index, embeddings.npy, chunks.json, meta.json vào folder index/.
+Mỗi lần đổi file chunks cần chạy lại file này.
+Lệnh chạy thường dùng:
+python build_index.py
+retriever_rrf.py
+Load index đã build từ folder index/.
+Tìm kiếm BM25.
+Tìm kiếm FAISS.
+Kết hợp hai nguồn bằng Reciprocal Rank Fusion.
+Trả về top_k chunks để pipeline dùng làm context.
+rag_answer.py
+Load BARTpho tokenizer theo cách thủ công để tránh lỗi tokenizer.
+Load BARTpho base model.
+Load LoRA adapter.
+Cung cấp hàm generate_answer() cho rag_pipeline.py và app.py sử dụng.
+rag_pipeline.py
+Nhận câu hỏi user.
+Tìm confirmed_answers trước khi gọi model.
+Nếu chưa có confirmed answer thì gọi retriever.
+Lấy nhiều chunks top_k, sau đó rerank theo ngành + học kỳ nếu cần.
+Ghép multi-context cho model.
+Với câu hỏi danh sách môn học theo ngành/học kỳ, trả lời trực tiếp từ chunk bảng.
+Với câu hỏi khác, gọi BARTpho-LoRA sinh answer.
+Chạy context_checker, answer_verifier và confidence_gate.
+Lưu answer_logs.
+Nếu không chắc, tạo pending_questions.
+4. Các file trong folder control/
+
+control/text_utils.py
+Các hàm quan trọng:
+normalize_text()
+extract_keywords()
+keyword_overlap_score()
+infer_topic()
+is_permission_question()
+is_curriculum_table_context()
+has_policy_evidence()
+control/context_checker.py
+Các hàm quan trọng:
+check_context()
+control/answer_verifier.py
+Các hàm quan trọng:
+verify_answer()
+control/confidence_gate.py
+Các hàm quan trọng:
+generate_teacher_questions()
+decide_action()
+build_user_response()
+control/query_constraints.py
+Các hàm quan trọng:
+extract_program()
+extract_semester()
+extract_query_constraints()
+is_curriculum_subject_list_question()
+rerank_hits_by_constraints()
+5. Các file trong folder knowledge/
+
+knowledge/db.py
+Tạo rag_chatbot.db.
+Tạo bảng confirmed_answers.
+Tạo bảng pending_questions.
+Tạo bảng answer_logs.
+Tạo bảng corrections.
+Bật WAL mode cho SQLite để đọc/ghi ổn hơn khi có nhiều request nhỏ.
+Tạo index cho các cột thường truy vấn.
+Các hàm chính:
+get_connection()
+init_db()
+knowledge/init_db.py
+Gọi init_db().
+In đường dẫn database để kiểm tra.
+python knowledge/init_db.py
+knowledge/store.py
+Thêm và tìm confirmed answer.
+Thêm và liệt kê pending questions.
+Thêm và liệt kê answer logs.
+Tạo và liệt kê corrections.
+Lưu câu trả lời thầy cô cho một pending question.
+Tìm các answer_logs có thể cần correction.
+Các hàm quan trọng:
+add_confirmed_answer()
+search_confirmed_answers()
+add_pending_question()
+list_pending_questions()
+add_answer_log()
+list_answer_logs_by_user()
+create_correction()
+list_corrections()
+save_teacher_answer_for_pending()
+find_logs_that_may_need_correction()
+6. Các file trong folder workflow/
+
+workflow/teacher_queue.py
+Lấy pending question theo ID.
+Format pending question để hiển thị trong CLI hoặc admin web.
+In danh sách pending questions.
+Nhận câu trả lời từ thầy cô/admin.
+Lưu câu trả lời xác nhận vào confirmed_answers.
+Gọi knowledge_sync để tạo correction nếu cần.
+Các hàm chính:
+get_pending_question_by_id()
+format_pending_question()
+print_pending_questions()
+answer_pending_question()
+workflow/knowledge_sync.py
+Khi có confirmed answer mới, lấy các answer_logs cùng topic.
+Đánh giá log nào có khả năng cần correction.
+Tạo nội dung correction message.
+Lưu correction vào database.
+Các hàm chính:
+should_create_correction()
+build_correction_message()
+sync_corrections_from_confirmed_answer()
+7. Các file admin CLI
+
+python admin_pending.py
+python admin_answer_pending.py --pending_id 1 --answer "..."
+python admin_corrections.py
+8. Các file test/debug
+
+9. Các file web trong static/
+
+10. Luồng hoạt động hiện tại
+10.1. Khi user hỏi
+chat.html
+-> chat.js
+-> POST /api/ask
+-> app.py
+-> rag_pipeline.py
+-> confirmed_answers?
+-> retriever_rrf.py
+-> control/query_constraints.py
+-> direct curriculum answer hoặc BARTpho-LoRA
+-> context_checker
+-> answer_verifier
+-> confidence_gate
+-> lưu answer_logs
+-> nếu không chắc: lưu pending_questions
+-> trả kết quả về web
+10.2. Khi admin xử lý pending
+admin.html
+-> admin.js
+-> GET /api/admin/pending
+-> admin nhập câu trả lời
+-> POST /api/admin/answer-pending
+-> workflow/teacher_queue.py
+-> knowledge/store.py
+-> lưu confirmed_answers
+-> workflow/knowledge_sync.py
+-> tạo corrections
+
+11. Vai trò từng phần trong một câu ngắn
+
+12. Phần nên bổ sung tiếp theo
+Bước tiếp theo để chatbot hoạt động tự nhiên hơn trong hội thoại nhiều lượt là bổ sung module lịch sử chat và viết lại câu hỏi follow-up.
+chat/
+|-- history_store.py
+`-- question_rewriter.py
+Lưu lịch sử hội thoại theo conversation_id.
+Hiểu các câu hỏi follow-up như: “còn học kỳ 2 thì sao?”, “vậy ngành đó thì thế nào?”.
+Rewrite câu hỏi phụ thuộc ngữ cảnh thành câu hỏi đầy đủ trước khi retrieval.
+Không dùng lịch sử chat làm nguồn sự thật; nguồn sự thật vẫn là confirmed_answers hoặc retrieved chunks.

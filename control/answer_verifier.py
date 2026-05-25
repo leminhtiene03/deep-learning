@@ -99,7 +99,7 @@ def verify_answer(
 
     if answer_score >= 0.45 and not unsupported_risky:
         status = "supported_answer"
-    elif answer_score >= 0.30:
+    elif answer_score >= 0.15:
         status = "partial_answer"
     else:
         status = "weak_answer"
