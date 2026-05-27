@@ -1,5 +1,9 @@
 # test_control.py
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from control.context_checker import check_context
 from control.answer_verifier import verify_answer
 from control.confidence_gate import decide_action, build_user_response

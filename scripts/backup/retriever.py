@@ -21,7 +21,8 @@ import numpy as np
 from pyvi import ViTokenizer
 from sentence_transformers import SentenceTransformer
 
-ROOT = Path(__file__).parent
+# Project root is two levels up (scripts/backup/ → scripts/ → root)
+ROOT = Path(__file__).resolve().parent.parent.parent
 INDEX_DIR = ROOT / "index"
 
 

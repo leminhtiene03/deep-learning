@@ -15,6 +15,11 @@ from control.context_checker import check_context
 from control.answer_verifier import verify_answer
 from control.confidence_gate import decide_action, build_user_response
 from control.text_utils import infer_topic
+from control.extractive_answer import (
+    should_use_extractive_answer,
+    format_extractive_answer,
+    is_enumeration_question,
+)
 
 from knowledge.db import init_db
 from knowledge.store import (
@@ -30,11 +35,12 @@ from chat.question_rewriter import rewrite_question, rewrite_question_simple
 def get_hit_attr(hit, name: str, default=None):
     return getattr(hit, name, default)
 
+
 def build_multi_context_from_hits(
-    hits,
-    tokenizer,
-    base_token_count: int = 0,
-    max_total_tokens: int = 1024
+        hits,
+        tokenizer,
+        base_token_count: int = 0,
+        max_total_tokens: int = 1024
 ):
     context_parts = []
     sources = []
@@ -84,7 +90,7 @@ def build_multi_context_from_hits(
                         "bm25_score": get_hit_attr(hit, "bm25_score", None),
                         "faiss_score": get_hit_attr(hit, "faiss_score", None),
                     })
-            break 
+            break
 
         context_parts.append(part)
         current_tokens += part_token_count
@@ -114,7 +120,7 @@ def find_confirmed_answer(question: str, topic: Optional[str] = None) -> Optiona
     )
 
     if results:
-        return results
+        return results[0] if isinstance(results, list) else results
 
     if topic:
         results = search_confirmed_answers(
@@ -123,23 +129,22 @@ def find_confirmed_answer(question: str, topic: Optional[str] = None) -> Optiona
             limit=1
         )
         if results:
-            return results
+            return results[0] if isinstance(results, list) else results
 
     return None
 
 
 def answer_question_controlled(
-    question: str,
-    retriever: RRFHybridRetriever,
-    tokenizer,
-    model,
-    device: str,
-    user_id: str = "anonymous",
-    candidate_k: int = 30,
-    top_k: int = 3,
-    conversation_id: Optional[str] = None
+        question: str,
+        retriever: RRFHybridRetriever,
+        tokenizer,
+        model,
+        device: str,
+        user_id: str = "anonymous",
+        candidate_k: int = 30,
+        top_k: int = 1,
+        conversation_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    
     init_db()
     topic = infer_topic(question)
 
@@ -247,7 +252,7 @@ def answer_question_controlled(
             context_snapshot=None,
             retrieved_chunk_id=None,
             reason="Không tìm thấy context phù hợp.",
-            teacher_questions=gate.get("teacher_questions",),
+            teacher_questions=gate.get("teacher_questions", ),
             status="pending"
         )
 
@@ -271,17 +276,17 @@ def answer_question_controlled(
             "pending_id": pending_id
         }
 
-    top_hit = hits[0]
-    chunk = top_hit.chunk
-
-    question_tokens = len(tokenizer.encode(question))
+    question_token_count = len(tokenizer.encode(question))
 
     context, sources = build_multi_context_from_hits(
         hits=hits,
         tokenizer=tokenizer,
-        base_token_count=question_tokens,
+        base_token_count=question_token_count,
         max_total_tokens=1024
     )
+
+    top_hit = hits[0]
+    chunk = top_hit.chunk
 
     chunk_id = chunk.get("chunk_id")
     page = chunk.get("page")
@@ -302,14 +307,23 @@ def answer_question_controlled(
         faiss_rank=faiss_rank
     )
 
-    # 4. Generate answer bằng BARTpho-LoRA
-    raw_answer = generate_answer(
-        question=question,
-        context=context,
-        tokenizer=tokenizer,
-        model=model,
-        device=device
-    )
+    # 4. Sinh câu trả lời: extractive (đủ ý) hoặc BARTpho-LoRA
+    use_extractive = should_use_extractive_answer(question, context)
+    prefer_complete = is_enumeration_question(question) and not use_extractive
+
+    if use_extractive:
+        raw_answer = format_extractive_answer(question, context)
+        source_type = "extractive_passage"
+    else:
+        raw_answer = generate_answer(
+            question=question,
+            context=context,
+            tokenizer=tokenizer,
+            model=model,
+            device=device,
+            prefer_complete=prefer_complete,
+        )
+        source_type = "rag_generation"
 
     # 5. Verify answer
     answer_check = verify_answer(
@@ -357,8 +371,8 @@ def answer_question_controlled(
             topic=gate["topic"],
             context_snapshot=context,
             retrieved_chunk_id=chunk_id,
-            reason="; ".join(gate.get("reasons",)),
-            teacher_questions=gate.get("teacher_questions",),
+            reason="; ".join(gate.get("reasons", )),
+            teacher_questions=gate.get("teacher_questions", ),
             status="pending"
         )
 
@@ -370,7 +384,7 @@ def answer_question_controlled(
         "question": question,
         "answer": final_answer,
         "raw_model_answer": raw_answer,
-        "source_type": "rag_generation",
+        "source_type": source_type,
         "answer_log_id": log_id,
         "topic": gate["topic"],
         "decision": gate["decision"],
@@ -461,7 +475,7 @@ def print_pipeline_result(result: Dict[str, Any], show_debug: bool = False, show
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--top_k", type=int, default=3)
+    parser.add_argument("--top_k", type=int, default=1)
     parser.add_argument("question", type=str)
     parser.add_argument("--user_id", type=str, default="anonymous")
 

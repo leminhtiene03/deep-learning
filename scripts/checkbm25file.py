@@ -1,6 +1,11 @@
+import sys
 import pickle
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-with open("./index/bm25.pkl", "rb") as f:
+from config import BM25_INDEX_PATH
+
+with open(BM25_INDEX_PATH, "rb") as f:
     obj = pickle.load(f)
 
 print("Type:", type(obj))

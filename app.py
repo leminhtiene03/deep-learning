@@ -97,7 +97,7 @@ class AskRequest(BaseModel):
     user_id: Optional[str] = "web_user"
     conversation_id: Optional[str] = None
     candidate_k: Optional[int] = 30
-    top_k: Optional[int] = 3
+    top_k: Optional[int] = 1
 
 
 class AskResponse(BaseModel):

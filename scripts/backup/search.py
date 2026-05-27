@@ -15,6 +15,10 @@ try:
 except Exception:
     pass
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts/backup/ for retriever.py
+
 from retriever import HybridRetriever
 
 

@@ -54,7 +54,7 @@ async function askQuestion(question) {
   user_id: getUserId(),
   question: question,
   candidate_k: 30,
-  top_k: 3
+  top_k: 1
 };
 
   const response = await fetch("/api/ask", {

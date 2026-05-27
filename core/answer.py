@@ -30,7 +30,8 @@ BASE_MODEL = "vinai/bartpho-syllable"
 ADAPTER_DIR = BARTPHO_ADAPTER_DIR
 
 MAX_INPUT_TOKENS = 1024
-MAX_NEW_TOKENS = 512
+MAX_NEW_TOKENS = 768
+MAX_NEW_TOKENS_COMPLETE = 1024
 
 
 def load_lora_model(adapter_dir: str):
@@ -81,10 +82,16 @@ def load_lora_model(adapter_dir: str):
 
     return tokenizer, model, device
 
-def build_source(question: str, context: str) -> str:
+def build_source(question: str, context: str, prefer_complete: bool = False) -> str:
     # Giữ format giống train_final:
     # "câu hỏi: ... context: ..."
-    return f"câu hỏi: {question.strip()} context: {context.strip()}"
+    base = f"câu hỏi: {question.strip()} context: {context.strip()}"
+    if prefer_complete:
+        base += (
+            " hướng dẫn: Trả lời đầy đủ tất cả các khoản, điểm và ý trong context. "
+            "Liệt kê rõ ràng, không tóm tắt, không bỏ sót."
+        )
+    return base
 
 
 def generate_answer(
@@ -95,8 +102,12 @@ def generate_answer(
     device: str,
     max_input_tokens: int = MAX_INPUT_TOKENS,
     max_new_tokens: int = MAX_NEW_TOKENS,
+    prefer_complete: bool = False,
 ):
-    source = build_source(question, context)
+    if prefer_complete:
+        max_new_tokens = max(max_new_tokens, MAX_NEW_TOKENS_COMPLETE)
+
+    source = build_source(question, context, prefer_complete=prefer_complete)
 
     inputs = tokenizer(
         source,
@@ -105,14 +116,19 @@ def generate_answer(
         truncation=True
     ).to(device)
 
+    # Giảm ép tóm tắt: ngram nhỏ hơn, penalty thấp hơn khi cần liệt kê đủ ý
+    no_repeat_ngram = 2 if prefer_complete else 3
+    repetition_penalty = 1.05 if prefer_complete else 1.15
+
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             num_beams=4,
-            no_repeat_ngram_size=3,
-            repetition_penalty=1.15,
-            early_stopping=True
+            no_repeat_ngram_size=no_repeat_ngram,
+            repetition_penalty=repetition_penalty,
+            length_penalty=0.9 if prefer_complete else 1.0,
+            early_stopping=not prefer_complete,
         )
 
     answer = tokenizer.decode(
